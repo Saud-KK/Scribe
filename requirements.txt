@@ -1,3 +1,5 @@
 discord.py
 flask
 pymongo[srv]
+motor
+dnspython
