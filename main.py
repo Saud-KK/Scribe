@@ -19,17 +19,13 @@ def keep_alive(): Thread(target=run).start()
 MONGO_URI = os.environ.get('MONGO_URI')
 
 if not MONGO_URI:
-    print("❌ ERROR: MONGO_URI environment variable is missing!")
-    # This prevents the bot from crashing immediately but warns you in the logs
-    client = None
-    styles_col = None
+    print("❌ ERROR: MONGO_URI missing!")
+    client = styles_col = None
 else:
     try:
-        # We add a timeout so it doesn't hang forever if the URI is wrong
         client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
         db = client["ScribeBot"]
         styles_col = db["role_styles"]
-        # Trigger a quick check to see if connection is valid
         client.admin.command('ping') 
         print("✅ Successfully connected to MongoDB Atlas")
     except Exception as e:
@@ -54,36 +50,27 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 async def sync_member_nick(member):
     base_name = member.global_name or member.name
-    
-    # Optimization: Cache DB results to avoid over-querying MongoDB
     cursor = styles_col.find()
     saved_roles = {doc["role_name"]: doc for doc in cursor}
     
-    # Check roles from highest position to lowest
     for role in reversed(member.roles):
         if role.name in saved_roles:
             data = saved_roles[role.name]
-            font_key = data.get("font", "none")
-            font_func = FONT_MAP.get(font_key, FONT_MAP["none"])
+            font_func = FONT_MAP.get(data.get("font", "none"), FONT_MAP["none"])
             prefix = data.get("prefix", "")
+            suffix = data.get("suffix", "") # NEW: Suffix support
             
-            final_nick = f"{prefix}{font_func(base_name)}"[:32]
+            final_nick = f"{prefix}{font_func(base_name)}{suffix}"[:32]
             
             if member.nick != final_nick:
                 try:
                     await member.edit(nick=final_nick)
-                except discord.Forbidden:
-                    print(f"Permission denied for {member.name}")
-                except Exception as e:
-                    print(f"Error: {e}")
+                except discord.Forbidden: pass
             return 
 
-    # No styled roles found, remove nickname if one exists
     if member.nick:
-        try:
-            await member.edit(nick=None)
-        except:
-            pass
+        try: await member.edit(nick=None)
+        except: pass
 
 def make_progress_bar(current, total):
     size = 10
@@ -93,106 +80,86 @@ def make_progress_bar(current, total):
 
 # --- 5. COMMANDS ---
 
-@bot.tree.command(name="createrole", description="Create a role with perms and color")
-@app_commands.describe(level="member, moderator, admin")
-async def createrole(interaction: discord.Interaction, name: str, level: str, hex_color: str = "#99aab5"):
+@bot.tree.command(name="preview", description="Show a visual gallery of all available fonts")
+async def preview(interaction: discord.Interaction):
+    embed = discord.Embed(title="🖋️ Scribe Font Preview", color=discord.Color.blue())
+    example_text = "Scribe Bot"
+    
+    description = ""
+    for name, func in FONT_MAP.items():
+        description += f"**{name}**: {func(example_text)}\n"
+    
+    embed.description = description
+    embed.set_footer(text="Use /setrole to apply these to roles!")
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="setrole", description="Assign font, prefix, and suffix to a role")
+async def setrole(interaction: discord.Interaction, role_name: str, font: str, prefix: str = "", suffix: str = ""):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
     
+    if font.lower() not in FONT_MAP:
+        return await interaction.response.send_message(f"❌ Invalid font! Use /preview to see list.", ephemeral=True)
+
+    styles_col.replace_one(
+        {"role_name": role_name}, 
+        {"role_name": role_name, "font": font.lower(), "prefix": prefix, "suffix": suffix}, 
+        upsert=True
+    )
+    await interaction.response.send_message(f"✅ Saved **{role_name}** style: `{prefix}` + `{font}` + `{suffix}`")
+
+@bot.tree.command(name="createrole", description="Create a role with perms and color")
+async def createrole(interaction: discord.Interaction, name: str, level: str, hex_color: str = "#99aab5"):
+    if not interaction.user.guild_permissions.administrator: return
     perms = discord.Permissions.none()
     if level.lower() == "member": perms.update(view_channel=True, send_messages=True, read_message_history=True)
     elif level.lower() == "moderator": perms.update(manage_messages=True, kick_members=True, ban_members=True)
     elif level.lower() == "admin": perms.administrator = True
     
-    try:
-        color = discord.Color(int(hex_color.replace("#", ""), 16))
-        role = await interaction.guild.create_role(name=name, permissions=perms, color=color)
-        await interaction.response.send_message(f"✅ Created role {role.mention} with **{level}** perms.")
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+    color = discord.Color(int(hex_color.replace("#", ""), 16))
+    role = await interaction.guild.create_role(name=name, permissions=perms, color=color)
+    await interaction.response.send_message(f"✅ Created {role.mention}")
 
-@bot.tree.command(name="setrole", description="Assign font/prefix to a role (Saves to MongoDB)")
-async def setrole(interaction: discord.Interaction, role_name: str, font: str, prefix: str = ""):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+@bot.tree.command(name="listroles", description="See all cloud configurations")
+async def listroles(interaction: discord.Interaction):
+    all_styles = list(styles_col.find())
+    if not all_styles: return await interaction.response.send_message("❌ No roles configured.")
     
-    if font.lower() not in FONT_MAP:
-        return await interaction.response.send_message(f"❌ Invalid font! Choices: {', '.join(FONT_MAP.keys())}", ephemeral=True)
+    output = "📜 **Current Configurations:**\n"
+    for d in all_styles:
+        output += f"• **{d['role_name']}**: `{d.get('prefix','')}` + `{d['font']}` + `{d.get('suffix','')}`\n"
+    await interaction.response.send_message(output)
 
-    # Upsert (Update if exists, Insert if not)
-    styles_col.replace_one(
-        {"role_name": role_name}, 
-        {"role_name": role_name, "font": font.lower(), "prefix": prefix}, 
-        upsert=True
-    )
-    await interaction.response.send_message(f"✅ Style for **{role_name}** saved to Cloud Database!")
-
-@bot.tree.command(name="syncall", description="Sync all nicknames publicly")
+@bot.tree.command(name="syncall", description="Sync everyone")
 async def syncall(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator: return
     await interaction.response.defer()
-    
     members = [m for m in interaction.guild.members if not m.bot]
-    total = len(members)
-    msg = await interaction.followup.send(f"🔄 **Syncing...**\n{make_progress_bar(0, total)}")
-    
+    msg = await interaction.followup.send(f"🔄 **Syncing...**")
     for i, m in enumerate(members, 1):
         await sync_member_nick(m)
-        if i % 5 == 0 or i == total: 
-            await msg.edit(content=f"🔄 **Syncing Server...**\n{make_progress_bar(i, total)}")
-        await asyncio.sleep(1.5)
-    await msg.edit(content=f"✅ **Sync Complete!**\n{make_progress_bar(total, total)}")
-
-@bot.tree.command(name="clearall", description="Reset all nicknames publicly")
-async def clearall(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator: return
-    await interaction.response.defer()
-    
-    members = [m for m in interaction.guild.members if m.nick]
-    total = len(members)
-    if total == 0:
-        return await interaction.followup.send("✅ Server is already clean!")
-
-    msg = await interaction.followup.send(f"🧹 **Clearing...**\n{make_progress_bar(0, total)}")
-    for i, m in enumerate(members, 1):
-        try: 
-            await m.edit(nick=None)
-        except: 
-            pass
-        if i % 5 == 0 or i == total: 
-            await msg.edit(content=f"🧹 **Clearing Nicknames...**\n{make_progress_bar(i, total)}")
-        await asyncio.sleep(1.5)
-    await msg.edit(content=f"✅ **Cleanup Complete!**")
-
-
-@bot.tree.command(name="listroles", description="See which font is assigned to which role (from Cloud)")
-async def listroles(interaction: discord.Interaction):
-    # Fetch all styles from MongoDB
-    cursor = styles_col.find()
-    all_styles = list(cursor)
-
-    if not all_styles:
-        return await interaction.response.send_message("❌ No roles are currently configured in the database.")
-    
-    output = "📜 **Current Cloud Role Configurations:**\n"
-    for data in all_styles:
-        role_name = data.get("role_name", "Unknown")
-        font_name = data.get("font", "none")
-        prefix = data.get("prefix", "None")
-        output += f"• **{role_name}**: Font: `{font_name}`, Prefix: `{prefix}`\n"
-    
-    await interaction.response.send_message(output)
-
+        if i % 5 == 0 or i == len(members): 
+            await msg.edit(content=f"🔄 **Syncing...**\n{make_progress_bar(i, len(members))}")
+        await asyncio.sleep(1.2)
+    await msg.edit(content="✅ **Sync Complete!**")
 
 # --- 6. EVENTS ---
+
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print(f"Scribe is ready. Connected to MongoDB Atlas.")
+    print(f"Scribe is ready.")
+
+@bot.event
+async def on_member_join(member):
+    # FEATURE (2): Auto-Sync when a new person joins
+    print(f"New member joined: {member.name}. Waiting for roles...")
+    # We wait a few seconds because some bots/systems add roles immediately after join
+    await asyncio.sleep(5)
+    await sync_member_nick(member)
 
 @bot.event
 async def on_member_update(before, after):
-    # Only trigger if roles actually changed
     if before.roles != after.roles: 
         await sync_member_nick(after)
 
