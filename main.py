@@ -46,7 +46,7 @@ FONT_MAP = {
 # --- 4. BOT SETUP ---
 intents = discord.Intents.default()
 intents.members = True 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, activity=discord.Game(name="Made by GhostMode"))
 
 async def sync_member_nick(member):
     base_name = member.global_name or member.name
