@@ -16,7 +16,6 @@ def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive(): Thread(target=run).start()
 
 # --- 2. MONGODB SETUP ---
-# On Render, set 'MONGO_URI' in Environment Variables
 MONGO_URI = os.environ.get('MONGO_URI')
 client = pymongo.MongoClient(MONGO_URI)
 db = client["ScribeBot"]
@@ -40,23 +39,36 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 async def sync_member_nick(member):
     base_name = member.global_name or member.name
-    # Fetch roles from DB
-    saved_roles = {doc["role_name"]: doc for doc in styles_col.find()}
     
+    # Optimization: Cache DB results to avoid over-querying MongoDB
+    cursor = styles_col.find()
+    saved_roles = {doc["role_name"]: doc for doc in cursor}
+    
+    # Check roles from highest position to lowest
     for role in reversed(member.roles):
         if role.name in saved_roles:
             data = saved_roles[role.name]
-            font_func = FONT_MAP.get(data["font"], FONT_MAP["none"])
+            font_key = data.get("font", "none")
+            font_func = FONT_MAP.get(font_key, FONT_MAP["none"])
             prefix = data.get("prefix", "")
+            
             final_nick = f"{prefix}{font_func(base_name)}"[:32]
             
             if member.nick != final_nick:
-                try: await member.edit(nick=final_nick)
-                except: pass
+                try:
+                    await member.edit(nick=final_nick)
+                except discord.Forbidden:
+                    print(f"Permission denied for {member.name}")
+                except Exception as e:
+                    print(f"Error: {e}")
             return 
+
+    # No styled roles found, remove nickname if one exists
     if member.nick:
-        try: await member.edit(nick=None)
-        except: pass
+        try:
+            await member.edit(nick=None)
+        except:
+            pass
 
 def make_progress_bar(current, total):
     size = 10
@@ -73,15 +85,18 @@ async def createrole(interaction: discord.Interaction, name: str, level: str, he
         return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
     
     perms = discord.Permissions.none()
-    if level.lower() == "member": perms.update(view_channel=True, send_messages=True)
+    if level.lower() == "member": perms.update(view_channel=True, send_messages=True, read_message_history=True)
     elif level.lower() == "moderator": perms.update(manage_messages=True, kick_members=True, ban_members=True)
     elif level.lower() == "admin": perms.administrator = True
     
-    color = discord.Color(int(hex_color.replace("#", ""), 16))
-    role = await interaction.guild.create_role(name=name, permissions=perms, color=color)
-    await interaction.response.send_message(f"✅ Created role {role.mention} with {level} perms.")
+    try:
+        color = discord.Color(int(hex_color.replace("#", ""), 16))
+        role = await interaction.guild.create_role(name=name, permissions=perms, color=color)
+        await interaction.response.send_message(f"✅ Created role {role.mention} with **{level}** perms.")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-@bot.tree.command(name="setrole", description="Assign font/prefix to a role (Saves to Cloud)")
+@bot.tree.command(name="setrole", description="Assign font/prefix to a role (Saves to MongoDB)")
 async def setrole(interaction: discord.Interaction, role_name: str, font: str, prefix: str = ""):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
@@ -89,44 +104,23 @@ async def setrole(interaction: discord.Interaction, role_name: str, font: str, p
     if font.lower() not in FONT_MAP:
         return await interaction.response.send_message(f"❌ Invalid font! Choices: {', '.join(FONT_MAP.keys())}", ephemeral=True)
 
-    styles_col.replace_one({"role_name": role_name}, {"role_name": role_name, "font": font.lower(), "prefix": prefix}, upsert=True)
-    await interaction.response.send_message(f"✅ Style for **{role_name}** saved to MongoDB!")
+    # Upsert (Update if exists, Insert if not)
+    styles_col.replace_one(
+        {"role_name": role_name}, 
+        {"role_name": role_name, "font": font.lower(), "prefix": prefix}, 
+        upsert=True
+    )
+    await interaction.response.send_message(f"✅ Style for **{role_name}** saved to Cloud Database!")
 
 @bot.tree.command(name="syncall", description="Sync all nicknames publicly")
 async def syncall(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator: return
     await interaction.response.defer()
+    
     members = [m for m in interaction.guild.members if not m.bot]
     total = len(members)
     msg = await interaction.followup.send(f"🔄 **Syncing...**\n{make_progress_bar(0, total)}")
+    
     for i, m in enumerate(members, 1):
         await sync_member_nick(m)
-        if i % 5 == 0 or i == total: await msg.edit(content=f"🔄 **Syncing...**\n{make_progress_bar(i, total)}")
-        await asyncio.sleep(1.5)
-
-@bot.tree.command(name="clearall", description="Reset all nicknames publicly")
-async def clearall(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator: return
-    await interaction.response.defer()
-    members = [m for m in interaction.guild.members if m.nick]
-    total = len(members)
-    msg = await interaction.followup.send(f"🧹 **Clearing...**\n{make_progress_bar(0, total)}")
-    for i, m in enumerate(members, 1):
-        try: await m.edit(nick=None)
-        except: pass
-        if i % 5 == 0 or i == total: await msg.edit(content=f"🧹 **Clearing...**\n{make_progress_bar(i, total)}")
-        await asyncio.sleep(1.5)
-
-# --- 6. EVENTS ---
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"Scribe is ready. MongoDB connected.")
-
-@bot.event
-async def on_member_update(before, after):
-    if before.roles != after.roles: await sync_member_nick(after)
-
-if __name__ == "__main__":
-    keep_alive()
-    bot.run(os.environ.get('DISCORD_TOKEN'))
+        if i %
