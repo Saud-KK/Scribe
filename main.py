@@ -123,4 +123,45 @@ async def syncall(interaction: discord.Interaction):
     
     for i, m in enumerate(members, 1):
         await sync_member_nick(m)
-        if i %
+        if i % 5 == 0 or i == total: 
+            await msg.edit(content=f"🔄 **Syncing Server...**\n{make_progress_bar(i, total)}")
+        await asyncio.sleep(1.5)
+    await msg.edit(content=f"✅ **Sync Complete!**\n{make_progress_bar(total, total)}")
+
+@bot.tree.command(name="clearall", description="Reset all nicknames publicly")
+async def clearall(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator: return
+    await interaction.response.defer()
+    
+    members = [m for m in interaction.guild.members if m.nick]
+    total = len(members)
+    if total == 0:
+        return await interaction.followup.send("✅ Server is already clean!")
+
+    msg = await interaction.followup.send(f"🧹 **Clearing...**\n{make_progress_bar(0, total)}")
+    for i, m in enumerate(members, 1):
+        try: 
+            await m.edit(nick=None)
+        except: 
+            pass
+        if i % 5 == 0 or i == total: 
+            await msg.edit(content=f"🧹 **Clearing Nicknames...**\n{make_progress_bar(i, total)}")
+        await asyncio.sleep(1.5)
+    await msg.edit(content=f"✅ **Cleanup Complete!**")
+
+# --- 6. EVENTS ---
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"Scribe is ready. Connected to MongoDB Atlas.")
+
+@bot.event
+async def on_member_update(before, after):
+    # Only trigger if roles actually changed
+    if before.roles != after.roles: 
+        await sync_member_nick(after)
+
+# --- 7. RUN ---
+if __name__ == "__main__":
+    keep_alive()
+    bot.run(os.environ.get('DISCORD_TOKEN'))
