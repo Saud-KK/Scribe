@@ -120,7 +120,7 @@ async def createrole(interaction: discord.Interaction, name: str, level: str, he
     role = await interaction.guild.create_role(name=name, permissions=perms, color=color)
     await interaction.response.send_message(f"✅ Created {role.mention}")
 
-@bot.tree.command(name="listroles", description="See all cloud configurations")
+@bot.tree.command(name="listroles", description="See all cloud configurations in a clean embed")
 async def listroles(interaction: discord.Interaction):
     # Fetch all styles from MongoDB
     all_styles = list(styles_col.find())
@@ -128,19 +128,28 @@ async def listroles(interaction: discord.Interaction):
     if not all_styles: 
         return await interaction.response.send_message("❌ No roles are currently configured in the database.")
     
-    output = "📜 **Current Cloud Role Configurations:**\n"
+    embed = discord.Embed(
+        title="📜 Current Cloud Role Configurations",
+        description="All roles currently managed by Scribe and stored in MongoDB Atlas.",
+        color=discord.Color.blue() # You can change this to any color (e.g., Color.gold())
+    )
+
     for d in all_styles:
-        # Extract data with safe defaults
         role_name = d.get('role_name', 'Unknown')
         font = d.get('font', 'none')
-        prefix = d.get('prefix', '')
-        suffix = d.get('suffix', '')
-        
-        # Format exactly as requested
-        output += f"• {role_name}: Font: {font}, Prefix: {prefix}, Suffix: {suffix}\n"
-    
-    await interaction.response.send_message(output)
+        prefix = d.get('prefix', 'None')
+        suffix = d.get('suffix', 'None')
 
+        # Formatting values for the embed field
+        value_text = f"**Font:** {font}\n**Prefix:** {prefix}\n**Suffix:** {suffix}"
+        
+        # We use inline=True so they sit side-by-side if the screen is wide enough
+        embed.add_field(name=f"✨ {role_name}", value=value_text, inline=True)
+
+    embed.set_footer(text=f"Total Configured Roles: {len(all_styles)}")
+    embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else None)
+    
+    await interaction.response.send_message(embed=embed)
 @bot.tree.command(name="syncall", description="Sync everyone")
 async def syncall(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator: return
