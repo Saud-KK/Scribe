@@ -149,6 +149,26 @@ async def clearall(interaction: discord.Interaction):
         await asyncio.sleep(1.5)
     await msg.edit(content=f"✅ **Cleanup Complete!**")
 
+
+@bot.tree.command(name="listroles", description="See which font is assigned to which role (from Cloud)")
+async def listroles(interaction: discord.Interaction):
+    # Fetch all styles from MongoDB
+    cursor = styles_col.find()
+    all_styles = list(cursor)
+
+    if not all_styles:
+        return await interaction.response.send_message("❌ No roles are currently configured in the database.")
+    
+    output = "📜 **Current Cloud Role Configurations:**\n"
+    for data in all_styles:
+        role_name = data.get("role_name", "Unknown")
+        font_name = data.get("font", "none")
+        prefix = data.get("prefix", "None")
+        output += f"• **{role_name}**: Font: `{font_name}`, Prefix: `{prefix}`\n"
+    
+    await interaction.response.send_message(output)
+
+
 # --- 6. EVENTS ---
 @bot.event
 async def on_ready():
