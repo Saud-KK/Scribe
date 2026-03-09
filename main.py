@@ -122,12 +122,23 @@ async def createrole(interaction: discord.Interaction, name: str, level: str, he
 
 @bot.tree.command(name="listroles", description="See all cloud configurations")
 async def listroles(interaction: discord.Interaction):
+    # Fetch all styles from MongoDB
     all_styles = list(styles_col.find())
-    if not all_styles: return await interaction.response.send_message("❌ No roles configured.")
     
-    output = "📜 **Current Configurations:**\n"
+    if not all_styles: 
+        return await interaction.response.send_message("❌ No roles are currently configured in the database.")
+    
+    output = "📜 **Current Cloud Role Configurations:**\n"
     for d in all_styles:
-        output += f"• **{d['role_name']}**: `{d.get('prefix','')}` + `{d['font']}` + `{d.get('suffix','')}`\n"
+        # Extract data with safe defaults
+        role_name = d.get('role_name', 'Unknown')
+        font = d.get('font', 'none')
+        prefix = d.get('prefix', '')
+        suffix = d.get('suffix', '')
+        
+        # Format exactly as requested
+        output += f"• {role_name}: Font: {font}, Prefix: {prefix}, Suffix: {suffix}\n"
+    
     await interaction.response.send_message(output)
 
 @bot.tree.command(name="syncall", description="Sync everyone")
