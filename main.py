@@ -17,9 +17,24 @@ def keep_alive(): Thread(target=run).start()
 
 # --- 2. MONGODB SETUP ---
 MONGO_URI = os.environ.get('MONGO_URI')
-client = pymongo.MongoClient(MONGO_URI)
-db = client["ScribeBot"]
-styles_col = db["role_styles"]
+
+if not MONGO_URI:
+    print("❌ ERROR: MONGO_URI environment variable is missing!")
+    # This prevents the bot from crashing immediately but warns you in the logs
+    client = None
+    styles_col = None
+else:
+    try:
+        # We add a timeout so it doesn't hang forever if the URI is wrong
+        client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        db = client["ScribeBot"]
+        styles_col = db["role_styles"]
+        # Trigger a quick check to see if connection is valid
+        client.admin.command('ping') 
+        print("✅ Successfully connected to MongoDB Atlas")
+    except Exception as e:
+        print(f"❌ MongoDB Connection Error: {e}")
+        client = None
 
 # --- 3. FONT TRANSFORMERS ---
 FONT_MAP = {
