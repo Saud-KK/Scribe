@@ -163,6 +163,47 @@ async def syncall(interaction: discord.Interaction):
         await asyncio.sleep(1.2)
     await msg.edit(content="✅ **Sync Complete!**")
 
+
+@bot.tree.command(name="fetchroles", description="List all server roles and their current styling status")
+async def fetchroles(interaction: discord.Interaction):
+    # 1. Get all roles from the server (excluding @everyone)
+    server_roles = sorted(interaction.guild.roles, key=lambda r: r.position, reverse=True)
+    
+    # 2. Get currently styled roles from MongoDB for comparison
+    styled_roles = {doc["role_name"] for doc in styles_col.find()}
+    
+    embed = discord.Embed(
+        title=f"📋 Server Roles for {interaction.guild.name}",
+        description="A list of all roles found in this server and their styling status.",
+        color=discord.Color.green()
+    )
+
+    styled_list = []
+    unstyled_list = []
+
+    for role in server_roles:
+        if role.is_default(): continue # Skip @everyone
+        
+        status = "✅ Styled" if role.name in styled_roles else "❌ Unstyled"
+        role_info = f"• **{role.name}** ({status})"
+        
+        if role.name in styled_roles:
+            styled_list.append(role_info)
+        else:
+            unstyled_list.append(role_info)
+
+    # Adding fields to the embed
+    if styled_list:
+        embed.add_field(name="🎨 Configured Roles", value="\n".join(styled_list[:15]) or "None", inline=False)
+    
+    if unstyled_list:
+        # We limit this to 15 to keep the embed clean; Discord has a character limit
+        embed.add_field(name="⚪ Other Server Roles", value="\n".join(unstyled_list[:15]) or "None", inline=False)
+
+    embed.set_footer(text=f"Total Roles: {len(server_roles) - 1}")
+    await interaction.response.send_message(embed=embed)
+
+
 # --- 6. EVENTS ---
 
 @bot.event
